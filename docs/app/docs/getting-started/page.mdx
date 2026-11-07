@@ -1,0 +1,215 @@
+import CalloutBox from "@/components/CalloutBox";
+import CodeBlock from "@/components/CodeBlock";
+
+# Getting Started
+
+Welcome to Stellar Subscriptions — a platform for recurring payments on the Stellar blockchain with bounded, revocable authorizations.
+
+## What Are Recurring Payments on Stellar?
+
+Traditional subscription services require you to:
+- Store payment details with the merchant
+- Trust they'll only charge the agreed amount
+- Hope they process cancellations promptly
+
+Stellar Subscriptions changes this. When you subscribe, you grant **time-bound, capped permission** for charges. The Stellar blockchain enforces these limits — not the merchant's backend.
+
+### Key Benefits
+
+- **You stay in control** — Set hard caps on total spending
+- **Instant revocation** — Cancel anytime, no merchant approval needed
+- **Transparent billing** — All charges recorded on-chain
+- **No custody risk** — Your tokens stay in your wallet until charged
+
+## Prerequisites
+
+Before you start, you'll need:
+
+1. **A Stellar wallet** with testnet XLM for fees (get from [Stellar Laboratory](https://laboratory.stellar.org/#account-creator))
+2. **Test USDC tokens** (available from our testnet faucet)
+3. **Basic understanding** of Stellar accounts and transactions
+
+<CalloutBox type="info">
+This guide uses **testnet**. Never use mainnet credentials while testing!
+</CalloutBox>
+
+## Quick Start: Your First Subscription
+
+Let's create a plan and subscribe to it on testnet.
+
+### Step 1: Deploy or Use Existing Contracts
+
+For this quickstart, we'll use the already-deployed testnet contracts:
+
+```typescript
+const PLAN_CONTRACT = "CBGT...XYZ"; // Deployed plan contract
+const SUBSCRIPTION_CONTRACT = "CAX5...ABC"; // Deployed subscription contract
+const REGISTRY_CONTRACT = "CCPQ...DEF"; // Deployed registry contract
+```
+
+See [Network Guide](#network-guide) below for full addresses.
+
+### Step 2: Create a Plan (Merchant)
+
+As a merchant, create a subscription plan:
+
+```typescript
+import { Contract, Keypair, Networks, TransactionBuilder } from "@stellar/stellar-sdk";
+
+// Merchant keypair
+const merchant = Keypair.fromSecret("S...");
+
+// Create plan: 10 USDC per month
+const planContract = new Contract(PLAN_CONTRACT);
+const createPlanOp = planContract.call(
+  "create_plan",
+  merchant.publicKey(),       // merchant address
+  "Premium Membership",        // plan name
+  "100000000",                 // 10 USDC (7 decimals)
+  USDC_ADDRESS,                // token contract address
+  2592000                      // ~30 days in ledgers
+);
+
+// Build and submit transaction
+const tx = new TransactionBuilder(account, {
+  fee: "1000",
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(createPlanOp)
+  .setTimeout(30)
+  .build();
+
+tx.sign(merchant);
+const result = await server.submitTransaction(tx);
+console.log("Plan created:", result.hash);
+```
+
+### Step 3: Subscribe (Subscriber)
+
+As a subscriber, subscribe to the plan with a cap:
+
+```typescript
+const subscriber = Keypair.fromSecret("S...");
+
+// Subscribe with a 120 USDC cap (12 months)
+const subscriptionContract = new Contract(SUBSCRIPTION_CONTRACT);
+const subscribeOp = subscriptionContract.call(
+  "subscribe",
+  subscriber.publicKey(),      // subscriber address
+  planId,                      // plan ID from step 2
+  "1200000000"                 // 120 USDC cap (7 decimals)
+);
+
+const tx = new TransactionBuilder(account, {
+  fee: "1000",
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(subscribeOp)
+  .setTimeout(30)
+  .build();
+
+tx.sign(subscriber);
+const result = await server.submitTransaction(tx);
+console.log("Subscription created:", result.hash);
+```
+
+### Step 4: Charge the Subscription (Merchant)
+
+After the billing interval passes, the merchant can charge:
+
+```typescript
+const chargeOp = subscriptionContract.call(
+  "charge",
+  subscriptionId              // subscription ID from step 3
+);
+
+const tx = new TransactionBuilder(account, {
+  fee: "1000",
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(chargeOp)
+  .setTimeout(30)
+  .build();
+
+tx.sign(merchant);
+const result = await server.submitTransaction(tx);
+console.log("Charged successfully:", result.hash);
+```
+
+### Step 5: Cancel the Subscription (Subscriber)
+
+The subscriber can cancel anytime:
+
+```typescript
+const cancelOp = subscriptionContract.call(
+  "cancel",
+  subscriptionId
+);
+
+const tx = new TransactionBuilder(account, {
+  fee: "1000",
+  networkPassphrase: Networks.TESTNET,
+})
+  .addOperation(cancelOp)
+  .setTimeout(30)
+  .build();
+
+tx.sign(subscriber);
+const result = await server.submitTransaction(tx);
+console.log("Subscription cancelled:", result.hash);
+```
+
+<CalloutBox type="success">
+**Success!** You've created a plan, subscribed, charged, and cancelled. That's the complete lifecycle.
+</CalloutBox>
+
+## Network Guide
+
+### Testnet (Recommended for Development)
+
+| Contract | Address |
+|----------|---------|
+| Plan | `CBGTUVQ7YJ3ERKKR3TNQYXYZQR4YQVQZXQYQZQYQZQYQZQYQ` |
+| Subscription | `CAX5DTMB4K9FHQNX5ZQYQZQYQZQYQZQYQZQYQZQYQZQYQ` |
+| Registry | `CCPQJFWM2O8RZQYQZQYQZQYQZQYQZQYQZQYQZQYQZQYQ` |
+| USDC (test) | `CBIELTK6YBZJU5UP2WWQEUCYKLPU6KPT5XQVQZQYQZQYQ` |
+
+**Horizon:** `https://horizon-testnet.stellar.org`
+**RPC:** `https://soroban-testnet.stellar.org`
+
+### Mainnet (Production)
+
+<CalloutBox type="warning">
+Mainnet contracts are not yet deployed. Testnet only for now.
+</CalloutBox>
+
+## What's Next?
+
+Now that you've seen the basics:
+
+1. **Understand the model** — Read [Authorization Model](/docs/concepts/authorization-model) to learn what you're authorizing
+2. **Explore contracts** — See [Contract Reference](/docs/contracts/subscription) for full function details
+3. **Build an integration** — Follow [Integration Guide](/docs/integration) for production-ready code
+4. **Query data** — Use our [API](/docs/api/overview) to fetch plans and subscription status
+
+## Common Questions
+
+### Q: Can a merchant charge me before the interval elapses?
+
+No. The contract enforces the billing interval. Early charge attempts fail with `IntervalNotElapsed`.
+
+### Q: What happens if I run out of tokens before a charge?
+
+The charge transaction fails (Stellar rejects the transfer). Your subscription remains active but unpaid. The merchant can retry later.
+
+### Q: Can I increase my cap after subscribing?
+
+Not in the current version. You'd need to cancel and create a new subscription with a higher cap.
+
+### Q: Are fees paid in XLM or the subscription token?
+
+Fees are paid in XLM (standard Stellar transaction fees). The subscription token (e.g., USDC) is only transferred during charges.
+
+---
+
+**Next:** Learn the [Authorization Model](/docs/concepts/authorization-model) in depth.
