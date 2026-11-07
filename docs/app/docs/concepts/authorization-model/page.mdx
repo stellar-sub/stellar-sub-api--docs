@@ -1,0 +1,169 @@
+import CalloutBox from "@/components/CalloutBox";
+import CodeBlock from "@/components/CodeBlock";
+
+# Authorization Model
+
+The Stellar Subscriptions authorization model is designed around a core principle: **subscribers grant bounded, revocable permission** to merchants to charge their account over time. This page explains exactly what you authorize when you subscribe, and how the system prevents abuse.
+
+## The Problem with Traditional Subscriptions
+
+Traditional subscription systems (web2) typically work one of two ways:
+
+1. **Store credit card details** — the merchant can charge you at will
+2. **Unbounded blockchain allowances** — you approve unlimited token transfers
+
+Both models share a dangerous flaw: **you lose control after the initial authorization**. The merchant can charge any amount, at any frequency, and you have no on-chain protection.
+
+## Our Solution: Bounded Authorization
+
+When you subscribe on Stellar, you grant an authorization with **three hard limits** enforced by smart contracts:
+
+### The Three Invariants
+
+<CalloutBox type="info">
+**Invariant 1: Total Cap**
+The merchant can never charge you more than the cap amount you specified, across the entire lifetime of your subscription.
+</CalloutBox>
+
+<CalloutBox type="info">
+**Invariant 2: Billing Interval**
+The merchant can only charge you once per billing interval (measured in Stellar ledgers). Attempts to charge more frequently will fail.
+</CalloutBox>
+
+<CalloutBox type="info">
+**Invariant 3: Revocation**
+You can cancel your subscription at any time, immediately revoking the merchant's ability to charge you. Once cancelled, all future charge attempts fail.
+</CalloutBox>
+
+These invariants are **enforced on-chain** by the subscription contract's `charge()` function. Even a malicious merchant cannot bypass them.
+
+## Worked Example: 120 USDC Cap, 10 USDC/month
+
+Let's walk through a concrete subscription to understand exactly what happens.
+
+### Initial Setup
+
+You want to subscribe to a service that costs **10 USDC per month**. You decide to authorize **12 months** worth of charges, so you set:
+
+- **Amount per charge**: 10 USDC
+- **Billing interval**: 2,592,000 ledgers (~30 days at 1 ledger/second)
+- **Cap**: 120 USDC (10 × 12 months)
+
+When you call `subscribe()`, the contract stores these values and grants the merchant permission to call `charge()` under these constraints.
+
+### Month 1: First Charge
+
+The merchant calls `charge()` on ledger 1,000,000. The contract checks:
+
+1. ✅ Has at least one interval passed since subscription start? **Yes** (this is the first charge)
+2. ✅ Is `total_charged + 10 USDC ≤ 120 USDC`? **Yes** (0 + 10 = 10 ≤ 120)
+3. ✅ Is the subscription active (not cancelled/paused)? **Yes**
+
+All checks pass. The contract:
+- Transfers 10 USDC from your account to the merchant
+- Updates `total_charged = 10 USDC`
+- Sets `last_charge_ledger = 1,000,000`
+- Calculates `next_charge_ledger = 1,000,000 + 2,592,000 = 3,592,000`
+
+### Month 2-11: Normal Charges
+
+Each month, the merchant charges 10 USDC. After 11 charges, `total_charged = 110 USDC`.
+
+### Month 12: Final Charge (Cap Nearly Reached)
+
+On ledger ~31,000,000, the merchant calls `charge()` again. The contract checks:
+
+1. ✅ Interval check passes
+2. ✅ `110 + 10 = 120 ≤ 120` (exactly at cap)
+3. ✅ Subscription active
+
+The charge succeeds. Now `total_charged = 120 USDC`.
+
+### Month 13: Cap Exhausted
+
+The merchant tries to charge again on ledger ~33,500,000. The contract checks:
+
+1. ✅ Interval check passes
+2. ❌ `120 + 10 = 130 > 120` **FAILS**
+
+The charge is **rejected**. The subscription status is automatically set to `Exhausted`. No tokens are transferred. **The merchant cannot extract more than the cap, ever.**
+
+### What About Earlier Cancellation?
+
+If you had called `cancel()` at any point (say, after month 5), the contract would:
+- Set subscription status to `Cancelled`
+- From that moment, all `charge()` calls fail immediately
+- Your remaining cap (70 USDC in this case) is protected
+
+## Protection Against Malicious Merchants
+
+### Scenario 1: Merchant Tries to Charge Too Often
+
+The merchant calls `charge()` twice in the same day (before the interval elapses). The second call:
+- Fails the interval check: `current_ledger < next_charge_ledger`
+- Reverts with error: `IntervalNotElapsed`
+- No tokens transferred
+
+### Scenario 2: Merchant Calls a Modified Contract
+
+The merchant deploys their own version of the charge function that skips cap checks. But:
+- They don't control *your* subscription contract instance
+- The authorization you granted is specific to the legitimate contract
+- Their modified contract has no permission to transfer your tokens
+- Attack fails at the Stellar protocol level
+
+### Scenario 3: Merchant Tries to Front-Run Your Cancellation
+
+You submit a `cancel()` transaction. The merchant sees it in the mempool and tries to submit a `charge()` first. Even if their transaction is processed first:
+- Your `cancel()` still goes through immediately after
+- They get at most one more charge (which was within their authorized interval)
+- The cap still applies to that charge
+- Future charges fail as expected
+
+This is not ideal UX, but it's **bounded damage** — they can't drain your cap before you revoke.
+
+## Pause vs Cancel
+
+Pausing a subscription is different from cancelling:
+
+### Pause
+- Sets status to `Paused`
+- Prevents charges while paused
+- Can be resumed by calling `resume()`
+- When resumed, the next charge ledger is recalculated from the resume point
+- Useful for temporary holds (e.g., going on vacation)
+
+### Cancel
+- Sets status to `Cancelled`
+- Prevents all future charges permanently
+- **Cannot be undone** — cancellation is final
+- The subscription record remains on-chain but is inactive
+- Useful when you no longer want the service
+
+<CalloutBox type="warning">
+**Important:** Pausing does *not* extend your cap. If you paused for 3 months and then resumed, you still have the same total cap. The billing interval simply shifts forward.
+</CalloutBox>
+
+## Why This Is Safer
+
+Traditional blockchain token approvals (like ERC-20 `approve()`) grant **unlimited access** until explicitly revoked. The merchant can transfer any amount at any time.
+
+Our model inverts this:
+- **Default state is no access** — the merchant must call `charge()` each time
+- **Each charge is validated** against cap, interval, and status
+- **Revocation is instant** — no waiting period, no merchant cooperation required
+- **Caps are absolute** — even buggy or malicious contract logic can't exceed them
+
+## Summary
+
+When you subscribe, you're not giving the merchant your tokens. You're granting them **permission to request** tokens, subject to:
+
+1. A total lifetime cap
+2. A minimum time between charges
+3. Your ability to instantly revoke
+
+These guarantees are enforced by the Stellar network itself, not by the merchant's honor system.
+
+---
+
+**Next:** Learn about the [Security Model](/docs/concepts/security-model) and how the contracts enforce these invariants.
