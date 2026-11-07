@@ -1,0 +1,165 @@
+import ApiEndpoint from "@/components/ApiEndpoint";
+import CalloutBox from "@/components/CalloutBox";
+
+# Plans API
+
+Query subscription plans created by merchants.
+
+## Endpoints
+
+<ApiEndpoint
+  method="GET"
+  path="/plans"
+  description="Get all active subscription plans"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/plans/:id"
+  description="Get a specific plan by ID"
+/>
+
+## GET /plans
+
+Returns all active plans on the platform.
+
+### Request
+
+```bash
+curl https://api.stellar-subscriptions.io/plans
+```
+
+### Response (200 OK)
+
+```json
+{
+  "plans": [
+    {
+      "id": "plan_abc123",
+      "merchant": "GAXB...XYZ",
+      "name": "Premium Membership",
+      "amount": "100000000",
+      "token": "CUSDC...ABC",
+      "interval_ledgers": 2592000,
+      "created_ledger": 1234567,
+      "is_active": true
+    },
+    {
+      "id": "plan_def456",
+      "merchant": "GBCD...789",
+      "name": "Basic Plan",
+      "amount": "50000000",
+      "token": "CUSDC...ABC",
+      "interval_ledgers": 2592000,
+      "created_ledger": 1234600,
+      "is_active": true
+    }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique plan identifier |
+| `merchant` | string | Stellar address of the merchant who created the plan |
+| `name` | string | Human-readable plan name |
+| `amount` | string | Charge amount per billing cycle (in stroops, 7 decimals for USDC) |
+| `token` | string | Token contract address (e.g., USDC) |
+| `interval_ledgers` | number | Billing interval in Stellar ledgers (~1 ledger/second) |
+| `created_ledger` | number | Ledger number when plan was created |
+| `is_active` | boolean | Whether plan accepts new subscriptions |
+
+<CalloutBox type="info">
+**Amounts are in stroops:** Divide by 10,000,000 to get decimal USDC. Example: `"100000000"` = 10 USDC
+</CalloutBox>
+
+## GET /plans/:id
+
+Get details of a specific plan.
+
+### Request
+
+```bash
+curl https://api.stellar-subscriptions.io/plans/plan_abc123
+```
+
+### Response (200 OK)
+
+```json
+{
+  "plan": {
+    "id": "plan_abc123",
+    "merchant": "GAXB...XYZ",
+    "name": "Premium Membership",
+    "amount": "100000000",
+    "token": "CUSDC...ABC",
+    "interval_ledgers": 2592000,
+    "created_ledger": 1234567,
+    "is_active": true
+  }
+}
+```
+
+### Response (404 Not Found)
+
+```json
+{
+  "error": "Plan not found"
+}
+```
+
+## TypeScript Example
+
+```typescript
+interface Plan {
+  id: string;
+  merchant: string;
+  name: string;
+  amount: string;
+  token: string;
+  interval_ledgers: number;
+  created_ledger: number;
+  is_active: boolean;
+}
+
+async function getPlans(): Promise<Plan[]> {
+  const response = await fetch("https://api.stellar-subscriptions.io/plans");
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.plans;
+}
+
+async function getPlanById(planId: string): Promise<Plan> {
+  const response = await fetch(`https://api.stellar-subscriptions.io/plans/${planId}`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Plan not found");
+    }
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.plan;
+}
+
+// Usage
+const plans = await getPlans();
+console.log(`Found ${plans.length} active plans`);
+
+const plan = await getPlanById("plan_abc123");
+const amountUSDC = parseInt(plan.amount) / 10_000_000;
+console.log(`${plan.name}: ${amountUSDC} USDC`);
+```
+
+## Filtering Active Plans
+
+Only active plans (`is_active: true`) appear in the `/plans` response. Deactivated plans are still accessible by ID via `/plans/:id` for historical purposes.
+
+---
+
+**See also:**
+- [Merchant Plans API](/docs/api/overview#endpoints-summary) — Get plans by merchant address
+- [Plan Contract Reference](/docs/contracts/plan)
