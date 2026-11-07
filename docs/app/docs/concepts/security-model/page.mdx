@@ -1,0 +1,200 @@
+import CalloutBox from "@/components/CalloutBox";
+
+# Security Model
+
+The Stellar Subscriptions platform is designed with security as the foundation. This page explains what merchants can and cannot do, how the contracts prevent abuse, and what attack vectors have been considered.
+
+## Core Security Principle
+
+**Trust is enforced by code, not by promises.**
+
+When you subscribe, you're not trusting the merchant to behave. You're relying on Stellar's consensus and the immutable logic of the subscription contract to enforce your authorization limits.
+
+## What Merchants CAN Do
+
+Merchants have limited, explicitly granted permissions:
+
+### 1. Create Plans
+
+Any Stellar account can create a plan specifying:
+- Plan name
+- Amount per charge
+- Token contract address
+- Billing interval (in ledgers)
+
+Plans are public and immutable once created. Merchants can deactivate plans but cannot modify terms.
+
+### 2. Charge Active Subscriptions
+
+Merchants can call `charge()` on subscriptions where:
+- The billing interval has elapsed since the last charge
+- The total charged plus this charge does not exceed the cap
+- The subscription status is `Active`
+
+The contract validates all three conditions **before** transferring tokens. If any check fails, the entire transaction reverts.
+
+### 3. View Subscription Data
+
+Merchants can query subscription details (status, cap, charged amount) to determine which subscriptions are chargeable. This data is public and read-only.
+
+## What Merchants CANNOT Do
+
+These actions are **impossible** even with malicious intent:
+
+### 1. Cannot Exceed the Cap
+
+The `charge()` function includes this check:
+
+```rust
+if subscription.total_charged + plan.amount > subscription.cap {
+    return Err(ContractError::CapExceeded);
+}
+```
+
+If this condition is true, the transaction reverts and no tokens transfer. There is **no code path** that allows charging beyond the cap.
+
+### 2. Cannot Charge Before Interval Elapses
+
+```rust
+let ledgers_since_last = env.ledger().sequence() - subscription.last_charge_ledger;
+if ledgers_since_last < subscription.interval_ledgers {
+    return Err(ContractError::IntervalNotElapsed);
+}
+```
+
+Time is measured in Stellar ledgers, which are consensus-validated. Merchants cannot manipulate ledger numbers.
+
+### 3. Cannot Charge Cancelled or Paused Subscriptions
+
+```rust
+if subscription.status != SubscriptionStatus::Active {
+    return Err(ContractError::SubscriptionNotActive);
+}
+```
+
+Once you cancel, the status change is permanent and immutable. Future charge attempts fail immediately.
+
+### 4. Cannot Prevent Cancellation
+
+Subscribers can call `cancel()` at any time. This function:
+- Checks that `env.caller() == subscription.subscriber` (only you can cancel your subscription)
+- Sets status to `Cancelled`
+- Does not require merchant approval or signature
+
+The merchant has **no ability to block** this operation.
+
+### 5. Cannot Modify Historical Data
+
+All charges, cancellations, and status changes emit events to the Stellar event stream. Once emitted, these events are permanent and tamper-proof. Merchants cannot rewrite history.
+
+## Attack Scenarios and Mitigations
+
+### Attack 1: Malicious Merchant Deploys Fake Contract
+
+**Scenario:** A merchant creates a modified subscription contract that ignores cap checks.
+
+**Why it fails:**
+- When you subscribe, you interact with **your** subscription contract instance
+- That instance's code is already deployed and immutable
+- The merchant's fake contract has no access to your wallet's authorization
+- Stellar's token contracts only respect authorizations from legitimate sources
+
+**Result:** The fake contract can't transfer your tokens. Attack fails at the protocol level.
+
+### Attack 2: Reentrancy Attack
+
+**Scenario:** Merchant's charge callback calls `charge()` again before the first call completes.
+
+**Why it fails:**
+- Soroban (Stellar's smart contract platform) has reentrancy protection
+- The `total_charged` update happens within the same atomic transaction
+- Even if reentrancy were possible, the second call would see updated state and fail the cap/interval check
+
+**Result:** Only one charge succeeds per transaction.
+
+### Attack 3: Front-Running Cancellation
+
+**Scenario:** You submit `cancel()`. The merchant sees it in the mempool and submits `charge()` with higher fees to get included first.
+
+**Why it's bounded:**
+- The charge still must pass interval and cap checks
+- They get **at most one** more charge (which was within authorized bounds)
+- Your cancellation still executes immediately after
+- All future charges fail
+
+**Result:** Not prevented, but damage is limited to one authorized charge. This is a known Stellar transaction ordering issue, not specific to our contracts.
+
+### Attack 4: Merchant Collusion with Validator
+
+**Scenario:** A merchant bribes a validator to censor your cancellation transaction.
+
+**Why it's impractical:**
+- Stellar's consensus requires agreement from multiple validators
+- You can resubmit the transaction repeatedly
+- Censoring transactions is detectable and harms validator reputation
+- The merchant still can't exceed your cap, even with extra time
+
+**Result:** Theoretically possible but economically irrational. The cap limits maximum damage.
+
+### Attack 5: Merchant Drains Subscription at Max Rate
+
+**Scenario:** A merchant with a 1-day interval charges exactly every day until the cap is exhausted.
+
+**Why this is not an attack:**
+- You **authorized** charges at this interval
+- The behavior is exactly what you agreed to when subscribing
+- You can cancel anytime to stop future charges
+
+**Result:** This is correct system behavior, not an exploit.
+
+## Auth Requirements Per Function
+
+| Function | Caller Requirement | Notes |
+|----------|-------------------|-------|
+| `create_plan()` | Any address | Creates a plan under caller's merchant ID |
+| `subscribe()` | Must be subscriber | Requires token authorization for future charges |
+| `charge()` | Usually merchant, but technically any | Tokens go to plan's merchant regardless of caller |
+| `cancel()` | Must be subscriber | Only the subscriber can cancel their own subscription |
+| `pause()` | Must be subscriber | Only the subscriber can pause their own subscription |
+| `resume()` | Must be subscriber | Only the subscriber can resume their own subscription |
+
+<CalloutBox type="info">
+**Note on `charge()` caller:** While anyone can technically call `charge()`, the tokens always transfer to the plan's merchant address. A third party calling `charge()` would just pay fees to benefit the merchant.
+</CalloutBox>
+
+## What "Security" Does NOT Mean
+
+This platform **does not** protect against:
+
+1. **Merchant delivering poor service** — You're paying for a service; the blockchain can't judge quality
+2. **You forgetting to cancel** — Active subscriptions remain chargeable until you cancel
+3. **Token price volatility** — A 100 USDC cap is fixed in USDC, not dollars
+4. **Merchant going out of business** — Charges stop, but you don't get automatic refunds
+
+These are **business risks**, not security vulnerabilities.
+
+## Audit Status
+
+<CalloutBox type="warning">
+**This project is currently unaudited.** While the contracts implement all described security measures, they have not been formally reviewed by a third-party security firm. Use on mainnet at your own risk.
+</CalloutBox>
+
+We plan to conduct a professional audit before mainnet deployment.
+
+## Best Practices for Subscribers
+
+1. **Set conservative caps** — Start with 2-3 billing cycles, not a year
+2. **Monitor charged amounts** — Use our API or blockchain explorers to track usage
+3. **Cancel when done** — Don't leave unused subscriptions active
+4. **Verify contract addresses** — Always confirm you're interacting with official contracts
+
+## Best Practices for Merchants
+
+1. **Charge on schedule** — Don't try to charge early; it will fail
+2. **Handle charge failures gracefully** — Subscribers might run out of tokens
+3. **Respect cancellations** — Don't spam failed charge attempts after cancellation
+4. **Be transparent** — Clearly communicate billing terms before subscription
+
+---
+
+**Next:** Explore the [Subscription Contract](/docs/contracts/subscription) reference to see how these guarantees are implemented in code.
