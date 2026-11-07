@@ -1,0 +1,153 @@
+import ApiEndpoint from "@/components/ApiEndpoint";
+
+# Stats API
+
+Get platform-wide statistics about plans, subscriptions, and charged volumes.
+
+<ApiEndpoint
+  method="GET"
+  path="/stats"
+  description="Get aggregate platform statistics"
+/>
+
+## GET /stats
+
+Returns high-level metrics for the entire platform.
+
+### Request
+
+```bash
+curl https://api.stellar-subscriptions.io/stats
+```
+
+### Response (200 OK)
+
+```json
+{
+  "stats": {
+    "total_plans": 42,
+    "active_plans": 38,
+    "total_subscriptions": 156,
+    "active_subscriptions": 89,
+    "total_charged_volume": {
+      "CUSDC...ABC": "45000000000",
+      "CETH...XYZ": "12500000000000000"
+    }
+  }
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_plans` | number | All plans ever created |
+| `active_plans` | number | Plans currently accepting subscriptions |
+| `total_subscriptions` | number | All subscriptions ever created |
+| `active_subscriptions` | number | Subscriptions with `status: active` |
+| `total_charged_volume` | object | Total charged amounts by token address |
+
+## TypeScript Example
+
+```typescript
+interface Stats {
+  total_plans: number;
+  active_plans: number;
+  total_subscriptions: number;
+  active_subscriptions: number;
+  total_charged_volume: Record<string, string>;
+}
+
+async function getPlatformStats(): Promise<Stats> {
+  const response = await fetch("https://api.stellar-subscriptions.io/stats");
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  const data = await response.json();
+  return data.stats;
+}
+
+// Format volume for display
+function formatVolume(stats: Stats): void {
+  console.log("Platform Statistics");
+  console.log("===================");
+  console.log(`Total Plans: ${stats.total_plans} (${stats.active_plans} active)`);
+  console.log(`Total Subscriptions: ${stats.total_subscriptions} (${stats.active_subscriptions} active)`);
+  console.log("\nCharged Volume:");
+  
+  Object.entries(stats.total_charged_volume).forEach(([token, amount]) => {
+    // Assuming 7 decimals for USDC-like tokens
+    const formatted = (BigInt(amount) / 10_000_000n).toString();
+    console.log(`  ${token.slice(0, 10)}...: ${formatted} tokens`);
+  });
+}
+
+// Usage
+const stats = await getPlatformStats();
+formatVolume(stats);
+```
+
+## Use Cases
+
+### Dashboard Display
+
+```typescript
+async function renderDashboard() {
+  const stats = await getPlatformStats();
+  
+  return {
+    metrics: [
+      { label: "Active Plans", value: stats.active_plans },
+      { label: "Active Subscriptions", value: stats.active_subscriptions },
+      { 
+        label: "Total Volume (USDC)", 
+        value: formatUSDC(stats.total_charged_volume["CUSDC...ABC"]) 
+      },
+    ],
+  };
+}
+```
+
+### Growth Tracking
+
+Poll stats periodically to track platform growth:
+
+```typescript
+async function trackGrowth() {
+  const stats = await getPlatformStats();
+  
+  // Store in database or analytics
+  await analytics.track("platform_stats", {
+    timestamp: Date.now(),
+    plans: stats.total_plans,
+    subscriptions: stats.total_subscriptions,
+    active_subscriptions: stats.active_subscriptions,
+  });
+}
+
+// Run every hour
+setInterval(trackGrowth, 3600000);
+```
+
+### Health Monitoring
+
+```typescript
+async function checkPlatformHealth(): Promise<boolean> {
+  const stats = await getPlatformStats();
+  
+  // Alert if active subscription rate is low
+  const activeRate = stats.active_subscriptions / stats.total_subscriptions;
+  if (activeRate < 0.5) {
+    console.warn(`Only ${(activeRate * 100).toFixed(1)}% of subscriptions are active`);
+    return false;
+  }
+  
+  return true;
+}
+```
+
+---
+
+**See also:**
+- [Plans API](/docs/api/plans)
+- [Subscriptions API](/docs/api/subscriptions)
