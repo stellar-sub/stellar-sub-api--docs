@@ -1,0 +1,147 @@
+import ApiEndpoint from "@/components/ApiEndpoint";
+import CalloutBox from "@/components/CalloutBox";
+
+# API Overview
+
+The Stellar Subscriptions API provides a REST interface to query indexed subscription and plan data from the Stellar blockchain.
+
+## Base URL
+
+```
+https://api.stellar-subscriptions.io
+```
+
+For local development:
+```
+http://localhost:3001
+```
+
+## Authentication
+
+The API is currently **public and unauthenticated**. All endpoints are read-only (GET requests).
+
+<CalloutBox type="info">
+Rate limiting will be added before mainnet launch. Current limit: 100 requests/minute per IP.
+</CalloutBox>
+
+## Endpoints Summary
+
+<ApiEndpoint
+  method="GET"
+  path="/plans"
+  description="Get all active subscription plans"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/plans/:id"
+  description="Get details of a specific plan"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/subscriptions"
+  description="Get all subscriptions with status and charged amounts"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/subscriptions/:id"
+  description="Get full details of a specific subscription including next charge ledger"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/merchants/:address/plans"
+  description="Get all plans created by a specific merchant"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/merchants/:address/subscriptions"
+  description="Get all subscriptions to a merchant's plans"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/stats"
+  description="Get platform-wide statistics"
+/>
+
+## Response Format
+
+All successful responses return JSON with this structure:
+
+```json
+{
+  "plans": [...],           // for /plans endpoints
+  "subscriptions": [...],   // for /subscriptions endpoints
+  "stats": {...}            // for /stats endpoint
+}
+```
+
+Error responses:
+
+```json
+{
+  "error": "Error message description"
+}
+```
+
+## Status Codes
+
+| Code | Meaning |
+|------|---------|
+| 200 | Success |
+| 404 | Resource not found (plan or subscription ID doesn't exist) |
+| 500 | Internal server error |
+
+## Data Freshness
+
+The API indexes data from Horizon every **10 seconds**. There may be a slight delay between on-chain events and API visibility.
+
+<CalloutBox type="warning">
+For real-time data or to verify critical information, always query the contracts directly via Soroban RPC.
+</CalloutBox>
+
+## Example: Full Subscription Flow
+
+```typescript
+// 1. List available plans
+const plansResponse = await fetch("https://api.stellar-subscriptions.io/plans");
+const { plans } = await plansResponse.json();
+
+// 2. Get specific plan details
+const planId = plans[0].id;
+const planResponse = await fetch(`https://api.stellar-subscriptions.io/plans/${planId}`);
+const { plan } = await planResponse.json();
+
+// 3. After subscribing on-chain, query your subscription
+const subId = "sub_abc123";
+const subResponse = await fetch(`https://api.stellar-subscriptions.io/subscriptions/${subId}`);
+const { subscription } = await subResponse.json();
+
+console.log(`Status: ${subscription.status}`);
+console.log(`Charged: ${subscription.total_charged} / ${subscription.cap}`);
+console.log(`Next charge at ledger: ${subscription.next_charge_ledger}`);
+```
+
+## CORS
+
+CORS is enabled for all origins:
+```
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: *
+```
+
+## Versioning
+
+The API is currently at **v0.1.0** (pre-release). Breaking changes may occur before v1.0.0. We'll announce major changes in the [CHANGELOG](https://github.com/<your-org>/stellar-subscriptions-api-docs/blob/main/CHANGELOG.md).
+
+---
+
+**Next:** Explore specific endpoint documentation:
+- [Plans API](/docs/api/plans)
+- [Subscriptions API](/docs/api/subscriptions)
+- [Stats API](/docs/api/stats)
