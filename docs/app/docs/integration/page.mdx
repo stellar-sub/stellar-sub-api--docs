@@ -1,0 +1,171 @@
+import CalloutBox from "@/components/CalloutBox";
+
+# Integration Guide
+
+This guide provides production-ready patterns for integrating Stellar Subscriptions into your application.
+
+## Quick Start
+
+Install dependencies:
+
+```bash
+npm install @stellar/stellar-sdk
+```
+
+## TypeScript SDK Wrapper
+
+Create a typed client for the subscription platform:
+
+```typescript
+import { Contract, Keypair, Networks, SorobanRpc, TransactionBuilder } from "@stellar/stellar-sdk";
+
+export class StellarSubscriptions {
+  private server: SorobanRpc.Server;
+  private planContract: Contract;
+  private subscriptionContract: Contract;
+  
+  constructor(
+    planAddress: string,
+    subscriptionAddress: string,
+    rpcUrl: string = "https://soroban-testnet.stellar.org"
+  ) {
+    this.server = new SorobanRpc.Server(rpcUrl);
+    this.planContract = new Contract(planAddress);
+    this.subscriptionContract = new Contract(subscriptionAddress);
+  }
+  
+  async createPlan(
+    merchant: Keypair,
+    name: string,
+    amount: string,
+    tokenAddress: string,
+    intervalLedgers: number
+  ): Promise<string> {
+    // Implementation from merchant guide
+    // ...
+  }
+  
+  async subscribe(
+    subscriber: Keypair,
+    planId: string,
+    cap: string
+  ): Promise<string> {
+    // Implementation from subscriber guide
+    // ...
+  }
+  
+  async charge(merchant: Keypair, subscriptionId: string): Promise<void> {
+    // Implementation from merchant guide
+    // ...
+  }
+  
+  async cancel(subscriber: Keypair, subscriptionId: string): Promise<void> {
+    // Implementation from subscriber guide
+    // ...
+  }
+}
+```
+
+## React Hook
+
+```typescript
+import { useState, useEffect } from "react";
+
+export function useSubscription(subscriptionId: string) {
+  const [subscription, setSubscription] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  useEffect(() => {
+    async function fetchSubscription() {
+      try {
+        const response = await fetch(
+          `https://api.stellar-subscriptions.io/subscriptions/${subscriptionId}`
+        );
+        const data = await response.json();
+        setSubscription(data.subscription);
+      } catch (err) {
+        setError(err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    fetchSubscription();
+  }, [subscriptionId]);
+  
+  return { subscription, loading, error };
+}
+```
+
+## Automated Charging Worker
+
+```typescript
+class ChargingWorker {
+  private sdk: StellarSubscriptions;
+  private merchantKeypair: Keypair;
+  private intervalMs: number;
+  
+  constructor(sdk: StellarSubscriptions, merchantKeypair: Keypair, intervalMs = 600000) {
+    this.sdk = sdk;
+    this.merchantKeypair = merchantKeypair;
+    this.intervalMs = intervalMs;
+  }
+  
+  async start() {
+    console.log("Starting charging worker...");
+    while (true) {
+      await this.runChargeCycle();
+      await new Promise(resolve => setTimeout(resolve, this.intervalMs));
+    }
+  }
+  
+  private async runChargeCycle() {
+    try {
+      const chargeable = await this.getChargeableSubscriptions();
+      console.log(`Found ${chargeable.length} subscriptions to charge`);
+      
+      for (const sub of chargeable) {
+        try {
+          await this.sdk.charge(this.merchantKeypair, sub.id);
+          console.log(`✅ Charged ${sub.id}`);
+        } catch (err) {
+          console.error(`❌ Failed to charge ${sub.id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error("Charge cycle error:", err);
+    }
+  }
+  
+  private async getChargeableSubscriptions() {
+    // Fetch and filter logic
+    // ...
+  }
+}
+```
+
+## Best Practices
+
+<CalloutBox type="success">
+**Security:**
+- Never expose private keys in frontend code
+- Use environment variables for secrets
+- Validate all inputs before sending transactions
+- Implement rate limiting on API calls
+</CalloutBox>
+
+<CalloutBox type="info">
+**Performance:**
+- Cache API responses when appropriate
+- Batch multiple subscription queries
+- Use webhooks or event streams for real-time updates
+- Implement exponential backoff for retries
+</CalloutBox>
+
+---
+
+**See also:**
+- [Merchant Guide](/docs/merchant-guide)
+- [Subscriber Guide](/docs/subscriber-guide)
+- [API Reference](/docs/api/overview)
