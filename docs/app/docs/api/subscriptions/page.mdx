@@ -1,0 +1,237 @@
+import ApiEndpoint from "@/components/ApiEndpoint";
+import CalloutBox from "@/components/CalloutBox";
+
+# Subscriptions API
+
+Query subscription status, charged amounts, and next charge timing.
+
+## Endpoints
+
+<ApiEndpoint
+  method="GET"
+  path="/subscriptions"
+  description="Get all subscriptions with status and caps"
+/>
+
+<ApiEndpoint
+  method="GET"
+  path="/subscriptions/:id"
+  description="Get full subscription details including next charge ledger"
+/>
+
+## GET /subscriptions
+
+Returns all subscriptions on the platform.
+
+### Request
+
+```bash
+curl https://api.stellar-subscriptions.io/subscriptions
+```
+
+### Response (200 OK)
+
+```json
+{
+  "subscriptions": [
+    {
+      "id": "sub_xyz789",
+      "plan_id": "plan_abc123",
+      "subscriber": "GCDE...456",
+      "merchant": "GAXB...XYZ",
+      "cap": "1200000000",
+      "total_charged": "300000000",
+      "status": "active",
+      "start_ledger": 1234567,
+      "last_charge_ledger": 3826567,
+      "next_charge_ledger": 6418567,
+      "interval_ledgers": 2592000,
+      "amount": "100000000",
+      "token": "CUSDC...ABC"
+    }
+  ]
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique subscription identifier |
+| `plan_id` | string | Associated plan ID |
+| `subscriber` | string | Stellar address of subscriber |
+| `merchant` | string | Stellar address of merchant |
+| `cap` | string | Maximum total amount that can be charged (stroops) |
+| `total_charged` | string | Amount charged so far (stroops) |
+| `status` | string | One of: `active`, `paused`, `cancelled`, `exhausted` |
+| `start_ledger` | number | Ledger when subscription was created |
+| `last_charge_ledger` | number \| null | Ledger of most recent charge |
+| `next_charge_ledger` | number \| null | Ledger when next charge is allowed |
+| `interval_ledgers` | number | Billing interval in ledgers |
+| `amount` | string | Amount per charge (stroops) |
+| `token` | string | Token contract address |
+
+## GET /subscriptions/:id
+
+Get detailed information about a specific subscription.
+
+### Request
+
+```bash
+curl https://api.stellar-subscriptions.io/subscriptions/sub_xyz789
+```
+
+### Response (200 OK)
+
+```json
+{
+  "subscription": {
+    "id": "sub_xyz789",
+    "plan_id": "plan_abc123",
+    "subscriber": "GCDE...456",
+    "merchant": "GAXB...XYZ",
+    "cap": "1200000000",
+    "total_charged": "300000000",
+    "status": "active",
+    "start_ledger": 1234567,
+    "last_charge_ledger": 3826567,
+    "next_charge_ledger": 6418567,
+    "interval_ledgers": 2592000,
+    "amount": "100000000",
+    "token": "CUSDC...ABC"
+  }
+}
+```
+
+### Response (404 Not Found)
+
+```json
+{
+  "error": "Subscription not found"
+}
+```
+
+## Subscription Status
+
+| Status | Description | Can be charged? |
+|--------|-------------|-----------------|
+| `active` | Normal state, charges allowed per interval | ✅ Yes |
+| `paused` | Temporarily suspended by subscriber | ❌ No |
+| `cancelled` | Permanently terminated by subscriber | ❌ No |
+| `exhausted` | Cap fully consumed | ❌ No |
+
+## TypeScript Example
+
+```typescript
+interface Subscription {
+  id: string;
+  plan_id: string;
+  subscriber: string;
+  merchant: string;
+  cap: string;
+  total_charged: string;
+  status: "active" | "paused" | "cancelled" | "exhausted";
+  start_ledger: number;
+  last_charge_ledger: number | null;
+  next_charge_ledger: number | null;
+  interval_ledgers: number;
+  amount: string;
+  token: string;
+}
+
+async function getSubscriptionById(subId: string): Promise<Subscription> {
+  const response = await fetch(
+    `https://api.stellar-subscriptions.io/subscriptions/${subId}`
+  );
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Subscription not found");
+    }
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const data = await response.json();
+  return data.subscription;
+}
+
+// Check if subscription is chargeable
+async function isChargeable(subId: string, currentLedger: number): Promise<boolean> {
+  const sub = await getSubscriptionById(subId);
+  
+  if (sub.status !== "active") return false;
+  if (!sub.next_charge_ledger) return false;
+  if (currentLedger < sub.next_charge_ledger) return false;
+  
+  const chargedAmount = BigInt(sub.total_charged);
+  const chargeAmount = BigInt(sub.amount);
+  const capAmount = BigInt(sub.cap);
+  
+  return chargedAmount + chargeAmount <= capAmount;
+}
+
+// Calculate cap usage percentage
+function getCapUsage(sub: Subscription): number {
+  const charged = BigInt(sub.total_charged);
+  const cap = BigInt(sub.cap);
+  if (cap === 0n) return 0;
+  return Number((charged * 100n) / cap);
+}
+
+// Usage
+const sub = await getSubscriptionById("sub_xyz789");
+console.log(`Status: ${sub.status}`);
+console.log(`Cap usage: ${getCapUsage(sub)}%`);
+
+if (await isChargeable(sub.id, currentLedgerSequence)) {
+  console.log("Ready to charge!");
+}
+```
+
+## Calculating Next Charge Time
+
+Ledgers on Stellar close approximately every second. To estimate when the next charge can occur:
+
+```typescript
+function estimateNextChargeTime(nextChargeLedger: number, currentLedger: number): Date {
+  const ledgersUntilCharge = nextChargeLedger - currentLedger;
+  const secondsUntilCharge = ledgersUntilCharge; // ~1 ledger/second
+  return new Date(Date.now() + secondsUntilCharge * 1000);
+}
+
+const sub = await getSubscriptionById("sub_xyz789");
+if (sub.next_charge_ledger) {
+  const nextTime = estimateNextChargeTime(sub.next_charge_ledger, currentLedger);
+  console.log(`Next charge: ${nextTime.toLocaleString()}`);
+}
+```
+
+<CalloutBox type="warning">
+Ledger times are **approximate**. Network congestion can affect ledger close times. Always verify via RPC before attempting on-chain charges.
+</CalloutBox>
+
+## Filtering Subscriptions
+
+```typescript
+// Get only active subscriptions
+const allSubs = await fetch("https://api.stellar-subscriptions.io/subscriptions")
+  .then(r => r.json());
+const activeSubs = allSubs.subscriptions.filter(s => s.status === "active");
+
+// Get subscriptions by subscriber
+const subscriberAddress = "GCDE...456";
+const userSubs = allSubs.subscriptions.filter(
+  s => s.subscriber === subscriberAddress
+);
+
+// Get subscriptions nearing cap (>90% charged)
+const nearingCap = allSubs.subscriptions.filter(s => {
+  const usage = Number((BigInt(s.total_charged) * 100n) / BigInt(s.cap));
+  return usage > 90;
+});
+```
+
+---
+
+**See also:**
+- [Merchant Subscriptions API](/docs/api/overview#endpoints-summary)
+- [Subscription Contract Reference](/docs/contracts/subscription)
+- [Subscriber Guide](/docs/subscriber-guide)
