@@ -1,0 +1,79 @@
+import CalloutBox from "@/components/CalloutBox";
+
+# Plan Contract
+
+The Plan Contract allows merchants to define subscription terms.
+
+## Overview
+
+Plans specify:
+- Amount to charge per billing cycle
+- Token to use for payment (e.g., USDC)
+- Billing interval in ledgers
+- Plan name and merchant address
+
+## Contract Address
+
+**Testnet:** `CBGTUVQ7YJ3ERKKR3TNQYXYZQR4YQVQZXQYQZQYQ` *(placeholder)*
+
+## Functions
+
+### create_plan()
+
+Create a new subscription plan.
+
+**Parameters:**
+- `merchant: Address` — Merchant's Stellar address
+- `name: String` — Human-readable plan name
+- `amount: i128` — Charge amount (in stroops)
+- `token: Address` — Token contract address
+- `interval_ledgers: u32` — Billing interval in ledgers
+
+**Returns:** `String` — Plan ID
+
+**Example:**
+
+```rust
+fn create_plan(
+    env: Env,
+    merchant: Address,
+    name: String,
+    amount: i128,
+    token: Address,
+    interval_ledgers: u32,
+) -> Result<String, ContractError> {
+    merchant.require_auth();
+    
+    let plan = Plan {
+        id: generate_id(&env),
+        merchant,
+        name,
+        amount,
+        token,
+        interval_ledgers,
+        created_ledger: env.ledger().sequence(),
+        is_active: true,
+    };
+    
+    save_plan(&env, &plan);
+    env.events().publish(("PlanCreated",), plan.clone());
+    Ok(plan.id)
+}
+```
+
+### deactivate_plan()
+
+Deactivate a plan (prevents new subscriptions).
+
+**Parameters:**
+- `plan_id: String` — Plan ID to deactivate
+
+**Returns:** `void`
+
+**Note:** Existing subscriptions continue to work.
+
+---
+
+**See also:**
+- [Subscription Contract](/docs/contracts/subscription)
+- [Merchant Guide](/docs/merchant-guide)
