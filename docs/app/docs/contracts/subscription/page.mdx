@@ -1,0 +1,335 @@
+import CalloutBox from "@/components/CalloutBox";
+
+# Subscription Contract
+
+The Subscription Contract manages individual subscriptions between subscribers and merchants' plans.
+
+## Overview
+
+This contract handles:
+- Creating new subscriptions with caps
+- Charging subscriptions (with cap and interval enforcement)
+- Cancelling subscriptions
+- Pausing and resuming subscriptions
+
+## Contract Address
+
+**Testnet:** `CAX5DTMB4K9FHQNX5ZQYQZQYQZQYQZQYQZQYQZQYQZQYQ` *(placeholder)*
+
+## Functions
+
+### subscribe()
+
+Create a new subscription to a plan.
+
+**Parameters:**
+- `subscriber: Address` — The subscriber's Stellar address
+- `plan_id: String` — ID of the plan to subscribe to
+- `cap: i128` — Maximum total amount that can be charged (in stroops)
+
+**Returns:** `String` — Subscription ID
+
+**Errors:**
+- `PlanNotFound` — The specified plan doesn't exist
+- `PlanNotActive` — The plan has been deactivated
+- `InvalidCap` — Cap is zero or negative
+
+**Events:** `Subscribed` with subscription details
+
+**Example:**
+
+```rust
+fn subscribe(
+    env: Env,
+    subscriber: Address,
+    plan_id: String,
+    cap: i128,
+) -> Result<String, ContractError> {
+    subscriber.require_auth();
+    
+    let plan = get_plan(&env, &plan_id)?;
+    if !plan.is_active {
+        return Err(ContractError::PlanNotActive);
+    }
+    
+    if cap <= 0 {
+        return Err(ContractError::InvalidCap);
+    }
+    
+    let subscription = Subscription {
+        id: generate_id(&env),
+        plan_id: plan_id.clone(),
+        subscriber: subscriber.clone(),
+        merchant: plan.merchant,
+        cap,
+        total_charged: 0,
+        status: SubscriptionStatus::Active,
+        start_ledger: env.ledger().sequence(),
+        last_charge_ledger: None,
+        next_charge_ledger: Some(env.ledger().sequence() + plan.interval_ledgers),
+        interval_ledgers: plan.interval_ledgers,
+        amount: plan.amount,
+        token: plan.token,
+    };
+    
+    save_subscription(&env, &subscription);
+    
+    env.events().publish(("Subscribed",), subscription.clone());
+    Ok(subscription.id)
+}
+```
+
+### charge()
+
+Charge an active subscription (merchant calls this).
+
+**Parameters:**
+- `subscription_id: String` — ID of the subscription to charge
+
+**Returns:** `void`
+
+**Errors:**
+- `SubscriptionNotFound` — The subscription doesn't exist
+- `SubscriptionNotActive` — Subscription is paused, cancelled, or exhausted
+- `IntervalNotElapsed` — Billing interval hasn't passed yet
+- `CapExceeded` — Charging would exceed the subscriber's cap
+
+**Events:** `Charged` with subscription ID and amount
+
+**Authorization:** Tokens are transferred from subscriber to merchant
+
+**Example:**
+
+```rust
+fn charge(
+    env: Env,
+    subscription_id: String,
+) -> Result<(), ContractError> {
+    let mut subscription = get_subscription(&env, &subscription_id)?;
+    
+    // Must be active
+    if subscription.status != SubscriptionStatus::Active {
+        return Err(ContractError::SubscriptionNotActive);
+    }
+    
+    // Check interval
+    let current_ledger = env.ledger().sequence();
+    if let Some(next) = subscription.next_charge_ledger {
+        if current_ledger < next {
+            return Err(ContractError::IntervalNotElapsed);
+        }
+    }
+    
+    // Check cap
+    if subscription.total_charged + subscription.amount > subscription.cap {
+        subscription.status = SubscriptionStatus::Exhausted;
+        subscription.next_charge_ledger = None;
+        save_subscription(&env, &subscription);
+        return Err(ContractError::CapExceeded);
+    }
+    
+    // Transfer tokens
+    let token = TokenClient::new(&env, &subscription.token);
+    token.transfer(
+        &subscription.subscriber,
+        &subscription.merchant,
+        &subscription.amount,
+    );
+    
+    // Update subscription
+    subscription.total_charged += subscription.amount;
+    subscription.last_charge_ledger = Some(current_ledger);
+    subscription.next_charge_ledger = Some(current_ledger + subscription.interval_ledgers);
+    
+    if subscription.total_charged >= subscription.cap {
+        subscription.status = SubscriptionStatus::Exhausted;
+        subscription.next_charge_ledger = None;
+    }
+    
+    save_subscription(&env, &subscription);
+    env.events().publish(("Charged",), (subscription_id, subscription.amount));
+    Ok(())
+}
+```
+
+<CalloutBox type="info">
+**Note:** While anyone can technically call `charge()`, tokens always transfer to the plan's merchant address, so only merchants benefit from calling it.
+</CalloutBox>
+
+### cancel()
+
+Permanently cancel a subscription (subscriber only).
+
+**Parameters:**
+- `subscription_id: String` — ID of the subscription to cancel
+
+**Returns:** `void`
+
+**Errors:**
+- `SubscriptionNotFound` — The subscription doesn't exist
+- `Unauthorized` — Caller is not the subscriber
+
+**Events:** `Cancelled` with subscription ID
+
+**Example:**
+
+```rust
+fn cancel(
+    env: Env,
+    subscription_id: String,
+) -> Result<(), ContractError> {
+    let mut subscription = get_subscription(&env, &subscription_id)?;
+    
+    subscription.subscriber.require_auth();
+    
+    subscription.status = SubscriptionStatus::Cancelled;
+    subscription.next_charge_ledger = None;
+    
+    save_subscription(&env, &subscription);
+    env.events().publish(("Cancelled",), subscription_id);
+    Ok(())
+}
+```
+
+### pause()
+
+Temporarily pause a subscription (subscriber only).
+
+**Parameters:**
+- `subscription_id: String` — ID of the subscription to pause
+
+**Returns:** `void`
+
+**Errors:**
+- `SubscriptionNotFound` — The subscription doesn't exist
+- `Unauthorized` — Caller is not the subscriber
+- `SubscriptionNotActive` — Can only pause active subscriptions
+
+**Events:** `Paused` with subscription ID
+
+### resume()
+
+Resume a paused subscription (subscriber only).
+
+**Parameters:**
+- `subscription_id: String` — ID of the subscription to resume
+
+**Returns:** `void`
+
+**Errors:**
+- `SubscriptionNotFound` — The subscription doesn't exist
+- `Unauthorized` — Caller is not the subscriber
+- `SubscriptionNotPaused` — Can only resume paused subscriptions
+
+**Events:** `Resumed` with subscription ID
+
+**Example:**
+
+```rust
+fn resume(
+    env: Env,
+    subscription_id: String,
+) -> Result<(), ContractError> {
+    let mut subscription = get_subscription(&env, &subscription_id)?;
+    
+    subscription.subscriber.require_auth();
+    
+    if subscription.status != SubscriptionStatus::Paused {
+        return Err(ContractError::SubscriptionNotPaused);
+    }
+    
+    subscription.status = SubscriptionStatus::Active;
+    
+    // Recalculate next charge from now
+    let current_ledger = env.ledger().sequence();
+    subscription.next_charge_ledger = Some(current_ledger + subscription.interval_ledgers);
+    
+    save_subscription(&env, &subscription);
+    env.events().publish(("Resumed",), subscription_id);
+    Ok(())
+}
+```
+
+## Data Structures
+
+### Subscription
+
+```rust
+pub struct Subscription {
+    pub id: String,
+    pub plan_id: String,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub cap: i128,
+    pub total_charged: i128,
+    pub status: SubscriptionStatus,
+    pub start_ledger: u32,
+    pub last_charge_ledger: Option<u32>,
+    pub next_charge_ledger: Option<u32>,
+    pub interval_ledgers: u32,
+    pub amount: i128,
+    pub token: Address,
+}
+```
+
+### SubscriptionStatus
+
+```rust
+pub enum SubscriptionStatus {
+    Active,
+    Paused,
+    Cancelled,
+    Exhausted,
+}
+```
+
+## Events
+
+All events are emitted to the Stellar event stream and indexed by Horizon.
+
+| Event | Data | When |
+|-------|------|------|
+| `Subscribed` | Full subscription object | New subscription created |
+| `Charged` | subscription_id, amount | Successful charge |
+| `Cancelled` | subscription_id | Subscription cancelled |
+| `Paused` | subscription_id | Subscription paused |
+| `Resumed` | subscription_id | Subscription resumed |
+
+## Security Notes
+
+### Cap Enforcement
+
+The cap is checked **before** token transfer:
+
+```rust
+if subscription.total_charged + subscription.amount > subscription.cap {
+    return Err(ContractError::CapExceeded);
+}
+```
+
+This guarantees subscribers never pay more than their cap.
+
+### Interval Enforcement
+
+Interval checks use Stellar ledger numbers, which are consensus-validated:
+
+```rust
+if current_ledger < next_charge_ledger {
+    return Err(ContractError::IntervalNotElapsed);
+}
+```
+
+Merchants cannot manipulate ledger numbers.
+
+### Authorization
+
+- `subscribe()` requires subscriber's signature
+- `charge()` can be called by anyone (but benefits only the merchant)
+- `cancel()`, `pause()`, `resume()` require subscriber's signature
+
+---
+
+**See also:**
+- [Plan Contract](/docs/contracts/plan)
+- [Security Model](/docs/concepts/security-model)
+- [Merchant Guide](/docs/merchant-guide)
